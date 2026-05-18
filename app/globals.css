@@ -1,26 +1,114 @@
 @import "tailwindcss";
 
+/*
+  PlayTag — a Spotify-integrated playlist generator.
+
+  Dark UI with a green tint — this is a music app, and the visual language
+  music apps use is dark and dense. Accent green is intentionally a touch
+  cooler and more saturated than Spotify's brand green so it reads as
+  PlayTag's own, while the literal "Save to Spotify" button uses the real
+  brand color for instant recognition.
+
+  All colors in OKLCH so changes stay perceptually uniform.
+*/
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: oklch(0.14 0.018 162);
+  --background-elevated: oklch(0.18 0.020 158);
+  --surface: oklch(0.22 0.022 156);
+  --surface-strong: oklch(0.27 0.024 154);
+
+  --border: oklch(0.30 0.025 152);
+  --border-strong: oklch(0.40 0.028 150);
+
+  --foreground: oklch(0.97 0.012 145);
+  --foreground-muted: oklch(0.72 0.020 150);
+  --foreground-subtle: oklch(0.52 0.022 150);
+
+  --accent: oklch(0.78 0.20 145);
+  --accent-ink: oklch(0.20 0.020 160);    /* foreground color when sitting ON accent */
+  --accent-soft: oklch(0.78 0.20 145 / 0.12);
+
+  --spotify: #1ED760;
+  --spotify-ink: #0a0a0a;
 }
 
 @theme inline {
   --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --color-background-elevated: var(--background-elevated);
+  --color-surface: var(--surface);
+  --color-surface-strong: var(--surface-strong);
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
+  --color-foreground: var(--foreground);
+  --color-foreground-muted: var(--foreground-muted);
+  --color-foreground-subtle: var(--foreground-subtle);
+
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+
+  --color-spotify: var(--spotify);
+
+  --font-sans: var(--font-sans), Arial, Helvetica, sans-serif;
+  --font-display: var(--font-display), Georgia, serif;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+}
+
+/* Tabular numerals — used for durations, percentages, track numbers, anywhere
+   columns of digits need to align. Plain Geist proportional numerals shift width
+   between glyphs and look uneven in tracklists. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Small tracked label — eyebrow text above section headings, status labels in the UI. */
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+/* Reserved exclusively for one big headline per page. Fraunces is loaded as a
+   variable serif with subtle SOFT axis dialled up so the curves feel chosen. */
+.display {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-variation-settings: "opsz" 96, "SOFT" 30, "WONK" 0;
+  line-height: 0.95;
+  letter-spacing: -0.025em;
+}
+
+/* Used for one accent phrase per page, not as a default style. */
+.display-italic {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-variation-settings: "opsz" 48, "SOFT" 80;
+  letter-spacing: -0.01em;
+}
+
+/* Stagger-in for list items appearing in sequence. Each item sets --delay
+   inline; no need for per-item keyframes. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise {
+  animation: rise 0.4s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: var(--delay, 0ms);
 }

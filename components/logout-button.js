@@ -17,9 +17,9 @@ export function LogoutButton() {
   return (
     <button
       onClick={handleLogout}
-      className="flex h-10 items-center justify-center rounded-full border border-black/10 px-5 text-sm font-medium text-zinc-700 transition-colors hover:bg-black/[.04] dark:border-white/15 dark:text-zinc-300 dark:hover:bg-white/[.06]"
+      className="text-sm text-foreground-muted underline-offset-4 transition-colors hover:text-accent hover:underline"
     >
-      Log out
+      Sign out
     </button>
   );
 }
