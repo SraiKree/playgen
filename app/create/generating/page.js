@@ -1,23 +1,20 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { startLibrarySync } from "./actions";
 
-// Concrete backend steps the real implementation will report. Each has a
-// progress threshold — when overall progress passes the threshold, the step
-// is "done"; the next pending step is shown as "running".
-const STEPS = [
-  { id: "library", label: "Reading your saved tracks", at: 30 },
-  { id: "match", label: "Matching tags against your library", at: 65 },
-  { id: "rank", label: "Ranking and ordering tracks", at: 90 },
-  { id: "save", label: "Preparing the playlist", at: 100 },
+const PHASES = [
+  { id: "library", label: "Reading your saved tracks", weight: 40 },
+  { id: "enrich", label: "Tagging tracks with Last.fm", weight: 60 },
 ];
+
+const POLL_MS = 1500;
 
 export default function GeneratingPage() {
   return (
-    <Suspense fallback={<Shell progress={0} tags={[]} />}>
+    <Suspense fallback={<Shell progress={0} tags={[]} phaseStatuses={{}} />}>
       <Inner />
     </Suspense>
   );
@@ -29,55 +26,114 @@ function Inner() {
   const tagsParam = params.get("tags") || "";
   const tags = tagsParam ? tagsParam.split(",").filter(Boolean) : [];
 
-  const [progress, setProgress] = useState(0);
+  const [jobId, setJobId] = useState(null);
+  const [job, setJob] = useState(null);            // last polled snapshot
   const [syncError, setSyncError] = useState(null);
-  const [, setEventId] = useState(null);
+  const startedRef = useRef(false);
 
-  // Fire the real Inngest sync once on mount. Idempotent on the server side
-  // (dedup keyed on userId for 24h), so React strict-mode double-invokes are
-  // safe. The eventId would feed a future progress-streaming UI; for now we
-  // just keep it in state for the dev tools.
   useEffect(() => {
-    let cancelled = false;
+    if (startedRef.current) return;
+    startedRef.current = true;
     (async () => {
-      const res = await startLibrarySync();
-      if (cancelled) return;
+      const res = await startLibrarySync(tags);
       if (!res.ok) setSyncError(res.error);
-      else setEventId(res.eventId);
+      else setJobId(res.jobId);
     })();
+
+  }, []);
+
+  useEffect(() => {
+    if (!jobId) return;
+    let cancelled = false;
+
+    const tick = async () => {
+      if (cancelled) return;
+      if (document.visibilityState === "hidden") return;
+      try {
+        const res = await fetch(`/api/jobs/${jobId}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const next = await res.json();
+        if (!cancelled) setJob(next);
+      } catch {
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, POLL_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       cancelled = true;
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
     };
-  }, []);
+  }, [jobId]);
 
-  // Ease-out-quart over ~4.5s. Visual placeholder until real progress
-  // streaming from the Inngest run lands (Inngest Realtime / polling).
-  useEffect(() => {
-    const start = performance.now();
-    const duration = 4500;
-    let frame;
-    const tick = (now) => {
-      const t = Math.min(1, (now - start) / duration);
-      const eased = 1 - Math.pow(1 - t, 4);
-      setProgress(Math.floor(eased * 100));
-      if (t < 1) frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, []);
+  const { progress, phaseStatuses } = computeProgress(job);
 
   useEffect(() => {
-    if (progress < 100) return;
+    if (job?.status !== "completed") return;
     const t = setTimeout(() => {
-      router.push(`/playlist/demo?${params.toString()}`);
+      const qs = params.toString();
+      router.push(qs ? `/playlist/demo?${qs}` : "/playlist/demo");
     }, 700);
     return () => clearTimeout(t);
-  }, [progress, params, router]);
+  }, [job?.status, params, router]);
 
-  return <Shell progress={progress} tags={tags} syncError={syncError} />;
+  // Surface backend failures (recorded by library-sync's catch) the same way
+  // we surface server-action failures.
+  const errorMessage = syncError ?? (job?.status === "failed" ? job.error_message : null);
+
+  return (
+    <Shell
+      progress={progress}
+      tags={tags}
+      phaseStatuses={phaseStatuses}
+      syncError={errorMessage}
+    />
+  );
 }
 
-function Shell({ progress, tags, syncError = null }) {
+function computeProgress(job) {
+  const statuses = { library: "pending", enrich: "pending" };
+  if (!job) return { progress: 0, phaseStatuses: statuses };
+
+  const libFrac =
+    job.library_total > 0
+      ? Math.min(1, job.library_done / job.library_total)
+      : 0;
+
+  const enrFrac =
+    job.enrich_total > 0
+      ? Math.min(1, job.enrich_done / job.enrich_total)
+      : job.status === "enriching" || job.status === "completed"
+        ? 1
+        : 0;
+
+  if (job.status === "syncing") {
+    statuses.library = libFrac >= 1 ? "done" : "active";
+  } else if (job.status === "enriching") {
+    statuses.library = "done";
+    statuses.enrich = enrFrac >= 1 ? "done" : "active";
+  } else if (job.status === "completed") {
+    statuses.library = "done";
+    statuses.enrich = "done";
+  }
+
+  const raw =
+    libFrac * PHASES[0].weight + enrFrac * PHASES[1].weight;
+  const progress =
+    job.status === "completed"
+      ? 100
+      : Math.min(99, Math.floor(raw));
+
+  return { progress, phaseStatuses: statuses };
+}
+
+function Shell({ progress, tags, phaseStatuses, syncError = null }) {
   return (
     <main className="flex min-h-screen flex-col">
       <header className="flex items-center justify-between border-b border-border px-6 py-5 sm:px-12">
@@ -103,14 +159,14 @@ function Shell({ progress, tags, syncError = null }) {
             ? "You need to sign in with Spotify before generating a playlist."
             : syncError === "missing_spotify_token"
               ? "Your Spotify session expired. Sign in again to continue."
-              : `Couldn't start sync: ${syncError}`}
+              : `Couldn't finish sync: ${syncError}`}
         </div>
       )}
 
       {/* Full-width progress bar pinned to the top edge — the only motion ornament */}
       <div className="h-1 w-full bg-border" aria-hidden>
         <div
-          className="h-full bg-accent transition-[width] duration-100 ease-out"
+          className="h-full bg-accent transition-[width] duration-300 ease-out"
           style={{ width: `${progress}%` }}
         />
       </div>
@@ -146,31 +202,25 @@ function Shell({ progress, tags, syncError = null }) {
           )}
         </div>
 
-        {/* Right: step list with state per step */}
+        {/* Right: phase list with state per phase */}
         <div className="col-span-12 lg:col-span-7 lg:pl-8">
           <p className="eyebrow text-foreground-subtle">Steps</p>
           <ol className="mt-4 flex flex-col">
-            {STEPS.map((step, i) => {
-              const prev = i === 0 ? 0 : STEPS[i - 1].at;
-              const done = progress >= step.at;
-              const active = !done && progress >= prev;
-              const status = done ? "done" : active ? "active" : "pending";
+            {PHASES.map((phase) => {
+              const status = phaseStatuses[phase.id] ?? "pending";
               return (
                 <li
-                  key={step.id}
+                  key={phase.id}
                   className="flex items-center gap-4 border-b border-border py-4 last:border-b-0"
                 >
                   <StatusDot status={status} />
                   <span
-                    className={`text-base ${
-                      status === "done"
-                        ? "text-foreground"
-                        : status === "active"
-                          ? "text-foreground"
-                          : "text-foreground-subtle"
-                    }`}
+                    className={`text-base ${status === "pending"
+                      ? "text-foreground-subtle"
+                      : "text-foreground"
+                      }`}
                   >
-                    {step.label}
+                    {phase.label}
                   </span>
                   <span className="ml-auto eyebrow tabular text-foreground-subtle">
                     {status === "done" ? "Done" : status === "active" ? "…" : ""}
