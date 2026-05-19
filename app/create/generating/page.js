@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { startLibrarySync } from "./actions";
 
 // Concrete backend steps the real implementation will report. Each has a
 // progress threshold — when overall progress passes the threshold, the step
@@ -29,9 +30,28 @@ function Inner() {
   const tags = tagsParam ? tagsParam.split(",").filter(Boolean) : [];
 
   const [progress, setProgress] = useState(0);
+  const [syncError, setSyncError] = useState(null);
+  const [, setEventId] = useState(null);
 
-  // Ease-out-quart over ~4.5s. Real implementation will replace this with a
-  // server-sent-events stream from the Inngest job.
+  // Fire the real Inngest sync once on mount. Idempotent on the server side
+  // (dedup keyed on userId for 24h), so React strict-mode double-invokes are
+  // safe. The eventId would feed a future progress-streaming UI; for now we
+  // just keep it in state for the dev tools.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await startLibrarySync();
+      if (cancelled) return;
+      if (!res.ok) setSyncError(res.error);
+      else setEventId(res.eventId);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Ease-out-quart over ~4.5s. Visual placeholder until real progress
+  // streaming from the Inngest run lands (Inngest Realtime / polling).
   useEffect(() => {
     const start = performance.now();
     const duration = 4500;
@@ -54,10 +74,10 @@ function Inner() {
     return () => clearTimeout(t);
   }, [progress, params, router]);
 
-  return <Shell progress={progress} tags={tags} />;
+  return <Shell progress={progress} tags={tags} syncError={syncError} />;
 }
 
-function Shell({ progress, tags }) {
+function Shell({ progress, tags, syncError = null }) {
   return (
     <main className="flex min-h-screen flex-col">
       <header className="flex items-center justify-between border-b border-border px-6 py-5 sm:px-12">
@@ -73,6 +93,19 @@ function Shell({ progress, tags }) {
           Cancel
         </Link>
       </header>
+
+      {syncError && (
+        <div
+          role="alert"
+          className="border-b border-border bg-accent-soft px-6 py-3 text-sm text-accent sm:px-12"
+        >
+          {syncError === "not_authenticated"
+            ? "You need to sign in with Spotify before generating a playlist."
+            : syncError === "missing_spotify_token"
+              ? "Your Spotify session expired. Sign in again to continue."
+              : `Couldn't start sync: ${syncError}`}
+        </div>
+      )}
 
       {/* Full-width progress bar pinned to the top edge — the only motion ornament */}
       <div className="h-1 w-full bg-border" aria-hidden>
