@@ -7,8 +7,16 @@ import { inngest } from "@/lib/inngest/client";
 import { librarySync } from "@/lib/inngest/functions/library-sync";
 import { trackEnrich } from "@/lib/inngest/functions/track-enrich";
 import { trackEnrichCron } from "@/lib/inngest/functions/track-enrich-cron";
+import { trackEnrichWikidata } from "@/lib/inngest/functions/track-enrich-wikidata";
+import { libraryBackfillIsrc } from "@/lib/inngest/functions/library-backfill-isrc";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [librarySync, trackEnrich, trackEnrichCron],
+  functions: [
+    librarySync,
+    trackEnrich,
+    trackEnrichCron,
+    trackEnrichWikidata,
+    libraryBackfillIsrc,
+  ],
 });
