@@ -30,6 +30,12 @@ export default async function Home({ searchParams }) {
           </a>
           {user ? (
             <div className="flex items-center gap-4">
+              <Link
+                href="/library"
+                className="text-foreground-muted underline-offset-4 hover:text-foreground hover:underline"
+              >
+                Library
+              </Link>
               <span className="hidden text-foreground-muted sm:inline">
                 {displayName}
               </span>
