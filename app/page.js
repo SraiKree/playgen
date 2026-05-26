@@ -36,9 +36,12 @@ export default async function Home({ searchParams }) {
               >
                 Library
               </Link>
-              <span className="hidden text-foreground-muted sm:inline">
+              <Link
+                href="/profile"
+                className="hidden text-foreground-muted underline-offset-4 hover:text-foreground hover:underline sm:inline"
+              >
                 {displayName}
-              </span>
+              </Link>
               <LogoutButton />
             </div>
           ) : (

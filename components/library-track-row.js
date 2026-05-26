@@ -1,21 +1,28 @@
 "use client";
 
 // One row of the /library track list. Collapsed state shows artwork + title +
-// artist + a few top community-tag chips. Clicking the row toggles an
-// expanded drawer that surfaces the Layer 2 tagging UI (CLAUDE.md §6):
+// artist + a few top community-tag chips plus a hint at any suggested tags.
+// Clicking the row toggles an expanded drawer that surfaces the Layer 2
+// tagging UI (CLAUDE.md §6):
 //
 //   - Add-a-tag input (server action: submitTrackTag)
-//   - Community tags list with up/down vote arrows
-//     (server actions: voteOnTag / clearVoteOnTag)
-//   - "Your pending submissions" — local to this session, since fresh
-//     submissions sit at score=0 (below the visibility threshold) and would
-//     otherwise vanish from the UI immediately after submit.
+//   - "Suggested tags" — every below-threshold tag from ANY user, score desc,
+//     with up/down vote arrows. This is where new tags accumulate the votes
+//     they need to graduate; surfacing them to everyone (not just the
+//     submitter) is what breaks the chicken-and-egg bootstrap problem. No
+//     rejection — negative-score tags stay listed.
+//   - Community tags list (score ≥ threshold) with up/down vote arrows
+//     (server actions: voteOnTag / clearVoteOnTag). A tag crossing the
+//     threshold graduates here on the next refresh and starts counting toward
+//     playlist generation.
 //   - Hide-your-own-tag button (server action: hideOwnTag)
 //
 // All writes use useTransition + router.refresh() so the server component
 // re-fetches authoritative community state after each action. This is
 // intentionally simpler than useOptimistic — vote-state is global, not
-// per-client, and we'd rather show the real number than guess.
+// per-client, and we'd rather show the real number than guess. The one local
+// touch: a just-submitted tag is shown immediately (score 0) until the refresh
+// lands it in the server-driven suggested list.
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
@@ -28,6 +35,7 @@ import {
 
 const MAX_INLINE_COMMUNITY = 2;
 const MAX_INLINE_LASTFM = 3;
+const MAX_INLINE_SUGGESTED = 1;
 const TAG_INPUT_MAX = 60; // generous; validateTagInput caps the normalized form at 40 server-side
 
 // Pretty labels for the Wikidata property enum. Keys mirror the enum values
@@ -65,6 +73,7 @@ function humanizeError(code) {
 export function LibraryTrackRow({
     track,
     communityTags,
+    suggestedTags = [],
     layer1Tags = { lastfm: [], wikidata: [] },
     currentUserId,
 }) {
@@ -74,15 +83,15 @@ export function LibraryTrackRow({
     const [tagInput, setTagInput] = useState("");
     const [errorMsg, setErrorMsg] = useState(null);
 
-    // Locally remembered submissions from this session. These tags exist in
-    // the DB (status: created or already-existed) but sit below the score
-    // threshold, so they're absent from `communityTags`. Tracking them in
-    // local state lets us reassure the user "yes, your tag landed".
-    const [pendingSubs, setPendingSubs] = useState([]);
-    // Locally hidden own-pending tags so the chip disappears immediately on
-    // click without waiting for a refresh (the refresh wouldn't change
-    // anything visible — these chips aren't server-driven).
-    const [hiddenPending, setHiddenPending] = useState(new Set());
+    // A just-submitted tag is a real DB row (we have its userTagId) but sits at
+    // score 0 — below threshold — so it belongs in the suggested list. Until
+    // router.refresh() refetches and the server includes it in `suggestedTags`,
+    // we show it locally so the user sees their tag land immediately.
+    const [justSubmitted, setJustSubmitted] = useState([]);
+    // Locally hidden tags so a chip disappears immediately on click without
+    // waiting for the refresh round-trip. Applies to both server-driven and
+    // just-submitted suggested entries.
+    const [locallyHidden, setLocallyHidden] = useState(new Set());
 
     function runAction(actionFn) {
         setErrorMsg(null);
@@ -109,14 +118,15 @@ export function LibraryTrackRow({
                 return;
             }
 
-            // If the tag is already visible in the community list (above
-            // threshold), don't double-track it as "pending" — it's already
-            // a chip the user can vote on.
-            const alreadyVisible = communityTags.some(
-                (c) => c.tagName === res.tagName,
-            );
-            if (!alreadyVisible) {
-                setPendingSubs((prev) =>
+            // If the tag is already a community chip (above threshold) or
+            // already in the server suggested list, the refresh alone will
+            // surface it — no need to track it locally. Otherwise hold it in
+            // justSubmitted so it appears immediately at score 0.
+            const alreadyShown =
+                communityTags.some((c) => c.tagName === res.tagName) ||
+                suggestedTags.some((s) => s.userTagId === res.userTagId);
+            if (!alreadyShown) {
+                setJustSubmitted((prev) =>
                     prev.some((p) => p.userTagId === res.userTagId)
                         ? prev
                         : [
@@ -138,47 +148,73 @@ export function LibraryTrackRow({
         );
     }
 
-    function handleHideCommunityTag(userTagId) {
-        runAction(() => hideOwnTag(userTagId));
-    }
-
-    function handleHidePending(userTagId) {
+    // Hide one of the user's own tags. Optimistically removes the chip, then
+    // calls the server; rolls back on failure. Works for both community and
+    // suggested entries since both are real user_tags rows.
+    function handleHideOwnTag(userTagId) {
         setErrorMsg(null);
-        setHiddenPending((prev) => {
-            const next = new Set(prev);
-            next.add(userTagId);
-            return next;
-        });
+        setLocallyHidden((prev) => new Set(prev).add(userTagId));
         startTransition(async () => {
             const res = await hideOwnTag(userTagId);
             if (!res?.ok) {
-                // Roll back the optimistic hide if the server rejected it.
-                setHiddenPending((prev) => {
+                setLocallyHidden((prev) => {
                     const next = new Set(prev);
                     next.delete(userTagId);
                     return next;
                 });
                 setErrorMsg(humanizeError(res?.error));
+                return;
             }
+            router.refresh();
         });
     }
 
-    const visiblePending = pendingSubs.filter(
-        (p) => !hiddenPending.has(p.userTagId),
-    );
+    // The suggested list shown to the user: server-driven below-threshold tags,
+    // plus any just-submitted ones the refresh hasn't picked up yet, minus
+    // anything hidden this session. Re-sorted score desc, then name asc, to
+    // match the server ordering when optimistic entries are mixed in.
+    const communityNames = new Set(communityTags.map((c) => c.tagName));
+    const serverSuggestedIds = new Set(suggestedTags.map((s) => s.userTagId));
+    const optimisticSuggested = justSubmitted
+        .filter(
+            (p) =>
+                !serverSuggestedIds.has(p.userTagId) &&
+                !communityNames.has(p.tagName),
+        )
+        .map((p) => ({
+            userTagId: p.userTagId,
+            tagId: null,
+            tagName: p.tagName,
+            submittedBy: currentUserId,
+            score: 0,
+            voteCount: 0,
+            currentUserVote: 0,
+        }));
+    const visibleSuggested = [...suggestedTags, ...optimisticSuggested]
+        .filter((s) => !locallyHidden.has(s.userTagId))
+        .sort((a, b) =>
+            b.score !== a.score
+                ? b.score - a.score
+                : (a.tagName ?? "").localeCompare(b.tagName ?? ""),
+        );
 
     // Inline chip strategy: lead with up to 2 community chips (accent, the
     // active signal), then fill with up to 3 Last.fm chips (muted, the
-    // reference signal). Anything beyond gets folded into a "+N" indicator.
+    // reference signal), then hint at 1 suggested tag (dashed, "vote me").
+    // Anything beyond gets folded into "+N" / "+N suggested" indicators.
     const inlineCommunity = communityTags.slice(0, MAX_INLINE_COMMUNITY);
     const inlineLastfm = layer1Tags.lastfm.slice(0, MAX_INLINE_LASTFM);
+    const inlineSuggested = visibleSuggested.slice(0, MAX_INLINE_SUGGESTED);
+    const moreSuggestedCount = visibleSuggested.length - inlineSuggested.length;
     const hiddenChipCount =
         communityTags.length -
         inlineCommunity.length +
         layer1Tags.lastfm.length -
         inlineLastfm.length;
     const hasAnyInline =
-        inlineCommunity.length > 0 || inlineLastfm.length > 0;
+        inlineCommunity.length > 0 ||
+        inlineLastfm.length > 0 ||
+        inlineSuggested.length > 0;
 
     // Wikidata: group by property for the drawer section.
     const wikidataByProperty = new Map();
@@ -242,6 +278,23 @@ export function LibraryTrackRow({
                     {hiddenChipCount > 0 && (
                         <span className="text-xs tabular text-foreground-subtle">
                             +{hiddenChipCount}
+                        </span>
+                    )}
+                    {inlineSuggested.map((s) => (
+                        <span
+                            key={`s-${s.userTagId}`}
+                            title="Suggested tag — open the row to vote"
+                            className="inline-flex items-center gap-1 rounded-full border border-dashed border-border-strong px-2 py-0.5 text-xs text-foreground-muted"
+                        >
+                            {s.tagName}
+                            <span className="tabular text-foreground-subtle">
+                                {s.score}
+                            </span>
+                        </span>
+                    ))}
+                    {moreSuggestedCount > 0 && (
+                        <span className="text-xs tabular text-foreground-subtle">
+                            +{moreSuggestedCount} suggested
                         </span>
                     )}
                     {!hasAnyInline && (
@@ -372,35 +425,114 @@ export function LibraryTrackRow({
                         </p>
                     )}
 
-                    {visiblePending.length > 0 && (
+                    {visibleSuggested.length > 0 && (
                         <div>
-                            <p className="eyebrow text-foreground-subtle">
-                                Your pending tags
-                            </p>
+                            <div className="flex items-baseline justify-between">
+                                <p className="eyebrow text-foreground-subtle">
+                                    Suggested tags
+                                </p>
+                                <p className="text-xs text-foreground-subtle">
+                                    {visibleSuggested.length} pending
+                                </p>
+                            </div>
                             <p className="mt-1 text-xs text-foreground-muted">
-                                Visible to others once they reach the score
-                                threshold (upvotes − downvotes ≥ 2).
+                                Vote these up. At a score of{" "}
+                                <span className="tabular text-foreground">
+                                    2
+                                </span>{" "}
+                                a tag graduates to a community tag and starts
+                                counting toward playlist generation.
                             </p>
-                            <ul className="mt-2 flex flex-wrap gap-1.5">
-                                {visiblePending.map((p) => (
-                                    <li
-                                        key={p.userTagId}
-                                        className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-border-strong px-2.5 py-0.5 text-xs text-foreground-muted"
-                                    >
-                                        <span>{p.tagName}</span>
-                                        <button
-                                            type="button"
-                                            onClick={() =>
-                                                handleHidePending(p.userTagId)
-                                            }
-                                            disabled={isPending}
-                                            aria-label={`Hide your pending tag ${p.tagName}`}
-                                            className="text-foreground-subtle transition-colors hover:text-foreground"
+                            <ul className="mt-3 flex flex-wrap gap-2">
+                                {visibleSuggested.map((t) => {
+                                    const isMine =
+                                        t.submittedBy === currentUserId;
+                                    const upActive = t.currentUserVote === 1;
+                                    const downActive = t.currentUserVote === -1;
+                                    return (
+                                        <li
+                                            key={t.userTagId}
+                                            className="flex items-center gap-0.5 rounded-full border border-dashed border-border-strong bg-background-elevated py-0.5 pl-1 pr-2 text-xs"
                                         >
-                                            ×
-                                        </button>
-                                    </li>
-                                ))}
+                                            <button
+                                                type="button"
+                                                onClick={() =>
+                                                    handleVote(
+                                                        t.userTagId,
+                                                        1,
+                                                        t.currentUserVote,
+                                                    )
+                                                }
+                                                disabled={isPending}
+                                                aria-pressed={upActive}
+                                                aria-label={`Upvote ${t.tagName}`}
+                                                className={`flex h-6 w-6 items-center justify-center rounded-full transition-colors ${
+                                                    upActive
+                                                        ? "text-accent"
+                                                        : "text-foreground-subtle hover:text-foreground"
+                                                }`}
+                                            >
+                                                ▲
+                                            </button>
+                                            <span
+                                                className={`tabular px-1 ${
+                                                    t.score > 0
+                                                        ? "text-foreground"
+                                                        : "text-foreground-subtle"
+                                                }`}
+                                            >
+                                                {t.score}
+                                            </span>
+                                            <button
+                                                type="button"
+                                                onClick={() =>
+                                                    handleVote(
+                                                        t.userTagId,
+                                                        -1,
+                                                        t.currentUserVote,
+                                                    )
+                                                }
+                                                disabled={isPending}
+                                                aria-pressed={downActive}
+                                                aria-label={`Downvote ${t.tagName}`}
+                                                className={`flex h-6 w-6 items-center justify-center rounded-full transition-colors ${
+                                                    downActive
+                                                        ? "text-accent"
+                                                        : "text-foreground-subtle hover:text-foreground"
+                                                }`}
+                                            >
+                                                ▼
+                                            </button>
+                                            <span className="px-2 font-medium text-foreground">
+                                                {t.tagName}
+                                            </span>
+                                            {isMine && (
+                                                <span
+                                                    title="You submitted this"
+                                                    className="rounded-full bg-surface px-1.5 text-[10px] uppercase tracking-wide text-foreground-subtle"
+                                                >
+                                                    yours
+                                                </span>
+                                            )}
+                                            {isMine && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                        handleHideOwnTag(
+                                                            t.userTagId,
+                                                        )
+                                                    }
+                                                    disabled={isPending}
+                                                    aria-label={`Hide your submission ${t.tagName}`}
+                                                    title="Hide your submission"
+                                                    className="ml-0.5 text-foreground-subtle transition-colors hover:text-foreground"
+                                                >
+                                                    ×
+                                                </button>
+                                            )}
+                                        </li>
+                                    );
+                                })}
                             </ul>
                         </div>
                     )}
@@ -489,7 +621,7 @@ export function LibraryTrackRow({
                                                 <button
                                                     type="button"
                                                     onClick={() =>
-                                                        handleHideCommunityTag(
+                                                        handleHideOwnTag(
                                                             t.userTagId,
                                                         )
                                                     }

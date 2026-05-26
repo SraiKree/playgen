@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getUserSavedTracks, getLayer1TagsForTracks } from "@/lib/user-library";
-import { getCommunityTagsForTracks } from "@/lib/community";
+import { getCommunityTagsForTracks, getSuggestedTagsForTracks } from "@/lib/community";
 import { LibraryTrackRow } from "@/components/library-track-row";
 import { LogoutButton } from "@/components/logout-button";
 
@@ -38,14 +38,20 @@ export default async function LibraryPage({ searchParams }) {
     // returns a Map keyed by track_id; the row component falls back to empty
     // structures when a track is absent.
     const trackIds = tracks.map((t) => t.trackId);
-    const [communityTagsByTrack, layer1TagsByTrack] = await Promise.all([
-        getCommunityTagsForTracks(supabase, {
-            trackIds,
-            currentUserId: user.id,
-            threshold: 2,
-        }),
-        getLayer1TagsForTracks(supabase, trackIds),
-    ]);
+    const [communityTagsByTrack, suggestedTagsByTrack, layer1TagsByTrack] =
+        await Promise.all([
+            getCommunityTagsForTracks(supabase, {
+                trackIds,
+                currentUserId: user.id,
+                threshold: 2,
+            }),
+            getSuggestedTagsForTracks(supabase, {
+                trackIds,
+                currentUserId: user.id,
+                threshold: 2,
+            }),
+            getLayer1TagsForTracks(supabase, trackIds),
+        ]);
 
     const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
     const displayName = user.user_metadata?.full_name || user.email;
@@ -66,9 +72,12 @@ export default async function LibraryPage({ searchParams }) {
                     >
                         New playlist
                     </Link>
-                    <span className="hidden text-foreground-muted sm:inline">
+                    <Link
+                        href="/profile"
+                        className="hidden text-foreground-muted underline-offset-4 hover:text-foreground hover:underline sm:inline"
+                    >
                         {displayName}
-                    </span>
+                    </Link>
                     <LogoutButton />
                 </nav>
             </header>
@@ -116,6 +125,9 @@ export default async function LibraryPage({ searchParams }) {
                                 track={t}
                                 communityTags={
                                     communityTagsByTrack.get(t.trackId) ?? []
+                                }
+                                suggestedTags={
+                                    suggestedTagsByTrack.get(t.trackId) ?? []
                                 }
                                 layer1Tags={
                                     layer1TagsByTrack.get(t.trackId) ?? {
