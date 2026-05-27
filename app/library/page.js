@@ -133,6 +133,7 @@ export default async function LibraryPage({ searchParams }) {
                                     layer1TagsByTrack.get(t.trackId) ?? {
                                         lastfm: [],
                                         wikidata: [],
+                                        artist: [],
                                     }
                                 }
                                 currentUserId={user.id}

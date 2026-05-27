@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { getProfilePageData, rankForXp, popularityDescriptor } from "@/lib/profile";
+import { getProfilePageData, rankForXp } from "@/lib/profile";
 import { LogoutButton } from "@/components/logout-button";
 
 export default async function ProfilePage() {
@@ -12,14 +12,14 @@ export default async function ProfilePage() {
     if (!user) redirect("/?auth_error=signin_required");
 
     const data = await getProfilePageData(supabase, user.id);
-    const { overview, genres, tags, decades, xp, contribution } = data;
+    const { overview, tags, decades, xp, contribution } = data;
 
     const displayName = user.user_metadata?.full_name || user.email || "You";
     const firstName = String(displayName).trim().split(/\s+/)[0];
     const hasLibrary = overview.trackCount > 0;
 
     const rank = rankForXp(xp.total);
-    const taste = buildTasteSentence({ genres, decades, overview });
+    const taste = buildTasteSentence({ tags, decades });
 
     return (
         <main className="flex min-h-screen flex-col">
@@ -97,58 +97,6 @@ export default async function ProfilePage() {
 
             {hasLibrary && (
                 <>
-                    {/* Genres — ranked with proportional weight bars. */}
-                    <Section
-                        label="What you reach for"
-                        note="Spotify genres across every artist in your library, by frequency."
-                    >
-                        {genres.length === 0 ? (
-                            <Quiet>
-                                No genre data yet — enrichment may still be
-                                running for these artists.
-                            </Quiet>
-                        ) : (
-                            <ol className="space-y-px">
-                                {genres.map((g, i) => {
-                                    const max = genres[0].count || 1;
-                                    const pct = Math.max(
-                                        6,
-                                        (g.count / max) * 100,
-                                    );
-                                    return (
-                                        <li
-                                            key={g.genre}
-                                            className="rise group relative flex items-center gap-4 py-3"
-                                            style={{ "--delay": `${i * 45}ms` }}
-                                        >
-                                            <span className="tabular w-7 shrink-0 text-sm text-foreground-subtle">
-                                                {String(i + 1).padStart(2, "0")}
-                                            </span>
-                                            <div className="min-w-0 flex-1">
-                                                <div className="flex items-baseline justify-between gap-4">
-                                                    <span className="truncate text-base font-medium capitalize text-foreground">
-                                                        {g.genre}
-                                                    </span>
-                                                    <span className="tabular shrink-0 text-xs text-foreground-subtle">
-                                                        {g.count}
-                                                    </span>
-                                                </div>
-                                                <div className="mt-2 h-px w-full bg-border">
-                                                    <div
-                                                        className="h-px bg-accent transition-[width]"
-                                                        style={{
-                                                            width: `${pct}%`,
-                                                        }}
-                                                    />
-                                                </div>
-                                            </div>
-                                        </li>
-                                    );
-                                })}
-                            </ol>
-                        )}
-                    </Section>
-
                     {/* Sonic signature — tag cloud sized by summed Last.fm weight. */}
                     <Section
                         label="Sonic signature"
@@ -191,88 +139,45 @@ export default async function ProfilePage() {
                         )}
                     </Section>
 
-                    {/* Eras + mainstream/underground axis, side by side on wide. */}
+                    {/* Eras — release-decade distribution across the library. */}
                     <Section
                         label="Where it lives"
-                        note="The decades you collect from, and how far off-centre your taste sits."
+                        note="The decades you collect from, by share of your library."
                     >
-                        <div className="grid grid-cols-1 gap-x-12 gap-y-12 lg:grid-cols-2">
-                            <div>
-                                <p className="eyebrow mb-5 text-foreground-subtle">
-                                    By decade
-                                </p>
-                                {decades.length === 0 ? (
-                                    <Quiet>No release dates on file.</Quiet>
-                                ) : (
-                                    <div className="flex h-32 items-end gap-2">
-                                        {decades.map((d, i) => {
-                                            const max = Math.max(
-                                                ...decades.map((x) => x.count),
-                                            );
-                                            const h = Math.max(
-                                                4,
-                                                (d.count / max) * 100,
-                                            );
-                                            return (
-                                                <div
-                                                    key={d.decade}
-                                                    className="rise flex flex-1 flex-col items-center justify-end gap-2"
-                                                    style={{
-                                                        "--delay": `${i * 50}ms`,
-                                                    }}
-                                                >
-                                                    <span className="tabular text-[10px] text-foreground-subtle">
-                                                        {d.count}
-                                                    </span>
-                                                    <div
-                                                        className="w-full bg-accent-soft"
-                                                        style={{
-                                                            height: `${h}%`,
-                                                        }}
-                                                    >
-                                                        <div className="h-1 w-full bg-accent" />
-                                                    </div>
-                                                    <span className="tabular text-xs text-foreground-muted">
-                                                        {decadeLabel(d.decade)}
-                                                    </span>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
+                        {decades.length === 0 ? (
+                            <Quiet>No release dates on file.</Quiet>
+                        ) : (
+                            <div className="flex h-32 items-end gap-2">
+                                {decades.map((d, i) => {
+                                    const max = Math.max(
+                                        ...decades.map((x) => x.count),
+                                    );
+                                    const h = Math.max(4, (d.count / max) * 100);
+                                    return (
+                                        <div
+                                            key={d.decade}
+                                            className="rise flex flex-1 flex-col items-center justify-end gap-2"
+                                            style={{
+                                                "--delay": `${i * 50}ms`,
+                                            }}
+                                        >
+                                            <span className="tabular text-[10px] text-foreground-subtle">
+                                                {d.count}
+                                            </span>
+                                            <div
+                                                className="w-full bg-accent-soft"
+                                                style={{ height: `${h}%` }}
+                                            >
+                                                <div className="h-1 w-full bg-accent" />
+                                            </div>
+                                            <span className="tabular text-xs text-foreground-muted">
+                                                {decadeLabel(d.decade)}
+                                            </span>
+                                        </div>
+                                    );
+                                })}
                             </div>
-
-                            <div>
-                                <p className="eyebrow mb-5 text-foreground-subtle">
-                                    Mainstream &harr; Underground
-                                </p>
-                                <div className="relative mt-9 h-px w-full bg-border-strong">
-                                    <div
-                                        className="absolute -top-1.5 h-3.5 w-3.5 -translate-x-1/2 rounded-full border-2 border-accent bg-background"
-                                        style={{
-                                            left: `${clamp(overview.avgPopularity)}%`,
-                                        }}
-                                    />
-                                </div>
-                                <div className="mt-3 flex justify-between text-xs text-foreground-subtle">
-                                    <span>Underground</span>
-                                    <span>Mainstream</span>
-                                </div>
-                                <p className="mt-6 max-w-sm text-sm leading-relaxed text-foreground-muted">
-                                    Average popularity{" "}
-                                    <span className="tabular text-foreground">
-                                        {Math.round(overview.avgPopularity)}
-                                    </span>
-                                    /100 — you sit in{" "}
-                                    <span className="text-foreground">
-                                        {popularityDescriptor(
-                                            overview.avgPopularity,
-                                        )}
-                                    </span>
-                                    .
-                                </p>
-                            </div>
-                        </div>
+                        )}
                     </Section>
                 </>
             )}
@@ -408,16 +313,18 @@ function Quiet({ children }) {
 
 // --- pure helpers ---------------------------------------------------------
 
-function buildTasteSentence({ genres, decades, overview }) {
-    const top = genres[0]?.genre;
+function buildTasteSentence({ tags, decades }) {
+    // Lead with the strongest Last.fm descriptor (Spotify genres are 403-blocked
+    // for this app, so they're no longer collected — see migration 0012).
+    const topTag = tags[0]?.tag;
     const dominantDecade = decades.length
         ? decades.reduce((a, b) => (b.count > a.count ? b : a))
         : null;
     const parts = [];
-    if (top) parts.push(`You lean ${top}`);
+    if (topTag) parts.push(`You lean ${topTag}`);
     if (dominantDecade)
         parts.push(`anchored in the ${decadeLabel(dominantDecade.decade)}`);
-    parts.push(popularityDescriptor(overview.avgPopularity));
+    if (parts.length === 0) return "Your taste, still taking shape.";
     return parts.join(", ") + ".";
 }
 
@@ -428,10 +335,6 @@ function decadeLabel(decade) {
 function formatHours(ms) {
     const hours = Math.round(ms / 3_600_000);
     return hours > 0 ? hours.toLocaleString() : "—";
-}
-
-function clamp(n) {
-    return Math.min(100, Math.max(0, Number(n) || 0));
 }
 
 function signed(n) {

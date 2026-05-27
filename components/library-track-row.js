@@ -35,8 +35,14 @@ import {
 
 const MAX_INLINE_COMMUNITY = 2;
 const MAX_INLINE_LASTFM = 3;
+const MAX_INLINE_ARTIST = 2;
 const MAX_INLINE_SUGGESTED = 1;
 const TAG_INPUT_MAX = 60; // generous; validateTagInput caps the normalized form at 40 server-side
+
+// Score a suggested tag must reach to graduate into a community tag. Mirrors
+// the `threshold: 2` the /library page passes to the community/suggested
+// fetches; the drawer renders a small N/GRADUATION_SCORE meter from it.
+const GRADUATION_SCORE = 2;
 
 // Pretty labels for the Wikidata property enum. Keys mirror the enum values
 // declared in migration 0004.
@@ -49,6 +55,12 @@ const WIKIDATA_PROPERTY_LABEL = {
     record_label: "Label",
     part_of_series: "Series",
 };
+
+// How many graduation-meter segments are filled for a given score (clamped to
+// [0, GRADUATION_SCORE]). Negative-scored suggestions show an empty meter.
+function gradFilled(score) {
+    return Math.max(0, Math.min(GRADUATION_SCORE, score));
+}
 
 // Server actions return short error codes; map to user-facing copy here.
 function humanizeError(code) {
@@ -74,7 +86,7 @@ export function LibraryTrackRow({
     track,
     communityTags,
     suggestedTags = [],
-    layer1Tags = { lastfm: [], wikidata: [] },
+    layer1Tags = { lastfm: [], wikidata: [], artist: [] },
     currentUserId,
 }) {
     const router = useRouter();
@@ -204,6 +216,14 @@ export function LibraryTrackRow({
     // Anything beyond gets folded into "+N" / "+N suggested" indicators.
     const inlineCommunity = communityTags.slice(0, MAX_INLINE_COMMUNITY);
     const inlineLastfm = layer1Tags.lastfm.slice(0, MAX_INLINE_LASTFM);
+    // Artist-floor genres are the fallback inline signal: only surface them in
+    // the collapsed row when there's no track-level Last.fm chip to show, so a
+    // track that would otherwise read "untagged" shows its artist's genre
+    // instead. The expanded drawer always lists them in full.
+    const inlineArtist =
+        inlineLastfm.length === 0
+            ? layer1Tags.artist.slice(0, MAX_INLINE_ARTIST)
+            : [];
     const inlineSuggested = visibleSuggested.slice(0, MAX_INLINE_SUGGESTED);
     const moreSuggestedCount = visibleSuggested.length - inlineSuggested.length;
     const hiddenChipCount =
@@ -214,6 +234,7 @@ export function LibraryTrackRow({
     const hasAnyInline =
         inlineCommunity.length > 0 ||
         inlineLastfm.length > 0 ||
+        inlineArtist.length > 0 ||
         inlineSuggested.length > 0;
 
     // Wikidata: group by property for the drawer section.
@@ -275,6 +296,15 @@ export function LibraryTrackRow({
                             {l.name}
                         </span>
                     ))}
+                    {inlineArtist.map((a) => (
+                        <span
+                            key={`a-${a.name}`}
+                            title="Genre via artist"
+                            className="inline-flex items-center rounded-full border border-border bg-surface px-2 py-0.5 text-xs italic text-foreground-subtle"
+                        >
+                            {a.name}
+                        </span>
+                    ))}
                     {hiddenChipCount > 0 && (
                         <span className="text-xs tabular text-foreground-subtle">
                             +{hiddenChipCount}
@@ -315,15 +345,11 @@ export function LibraryTrackRow({
             </button>
 
             {expanded && (
-                <div className="space-y-5 border-t border-border bg-background px-3 py-4 sm:px-6 sm:py-5">
+                <div className="space-y-4 border-t border-border bg-background px-3 py-4 sm:px-6 sm:py-5">
                     {layer1Tags.lastfm.length > 0 && (
                         <div>
                             <p className="eyebrow text-foreground-subtle">
                                 Last.fm signals
-                            </p>
-                            <p className="mt-1 text-xs text-foreground-muted">
-                                Top tags from Last.fm at enrichment time.
-                                Reference only — frozen, not voted on.
                             </p>
                             <ul className="mt-2 flex flex-wrap gap-1.5">
                                 {layer1Tags.lastfm.map((l) => (
@@ -345,10 +371,6 @@ export function LibraryTrackRow({
                         <div>
                             <p className="eyebrow text-foreground-subtle">
                                 Wikidata signals
-                            </p>
-                            <p className="mt-1 text-xs text-foreground-muted">
-                                Structured facts (genre, language, instruments,
-                                &hellip;) sourced from Wikidata.
                             </p>
                             <dl className="mt-2 space-y-2">
                                 {[...wikidataByProperty.entries()].map(
@@ -379,11 +401,33 @@ export function LibraryTrackRow({
                         </div>
                     )}
 
+                    {layer1Tags.artist.length > 0 && (
+                        <div>
+                            <p className="eyebrow text-foreground-subtle">
+                                Genre via artist
+                            </p>
+                            <ul className="mt-2 flex flex-wrap gap-1.5">
+                                {layer1Tags.artist.map((a) => (
+                                    <li
+                                        key={a.name}
+                                        title="Inherited from this track's artist (Last.fm)"
+                                        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2 py-0.5 text-xs italic text-foreground-subtle"
+                                    >
+                                        <span>{a.name}</span>
+                                        <span className="tabular not-italic text-foreground-subtle">
+                                            {a.count}
+                                        </span>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+
                     {layer1Tags.lastfm.length === 0 &&
-                        layer1Tags.wikidata.length === 0 && (
+                        layer1Tags.wikidata.length === 0 &&
+                        layer1Tags.artist.length === 0 && (
                             <p className="text-xs text-foreground-subtle">
-                                No reference tags yet — enrichment may still be
-                                pending for this track.
+                                No reference tags yet.
                             </p>
                         )}
 
@@ -425,6 +469,17 @@ export function LibraryTrackRow({
                         </p>
                     )}
 
+                    {visibleSuggested.length === 0 && (
+                        <div>
+                            <p className="eyebrow text-foreground-subtle">
+                                Suggested tags
+                            </p>
+                            <p className="mt-2 text-xs text-foreground-muted">
+                                No suggested tags yet.
+                            </p>
+                        </div>
+                    )}
+
                     {visibleSuggested.length > 0 && (
                         <div>
                             <div className="flex items-baseline justify-between">
@@ -435,14 +490,6 @@ export function LibraryTrackRow({
                                     {visibleSuggested.length} pending
                                 </p>
                             </div>
-                            <p className="mt-1 text-xs text-foreground-muted">
-                                Vote these up. At a score of{" "}
-                                <span className="tabular text-foreground">
-                                    2
-                                </span>{" "}
-                                a tag graduates to a community tag and starts
-                                counting toward playlist generation.
-                            </p>
                             <ul className="mt-3 flex flex-wrap gap-2">
                                 {visibleSuggested.map((t) => {
                                     const isMine =
@@ -505,6 +552,32 @@ export function LibraryTrackRow({
                                             </button>
                                             <span className="px-2 font-medium text-foreground">
                                                 {t.tagName}
+                                            </span>
+                                            <span
+                                                className="flex items-center gap-1"
+                                                title={`Score ${gradFilled(t.score)} of ${GRADUATION_SCORE} to graduate`}
+                                            >
+                                                <span
+                                                    aria-hidden
+                                                    className="flex gap-0.5"
+                                                >
+                                                    {Array.from({
+                                                        length: GRADUATION_SCORE,
+                                                    }).map((_, i) => (
+                                                        <span
+                                                            key={i}
+                                                            className={`h-1 w-2.5 rounded-full ${
+                                                                i < gradFilled(t.score)
+                                                                    ? "bg-accent"
+                                                                    : "border border-border-strong"
+                                                            }`}
+                                                        />
+                                                    ))}
+                                                </span>
+                                                <span className="tabular text-[10px] text-foreground-subtle">
+                                                    {gradFilled(t.score)}/
+                                                    {GRADUATION_SCORE}
+                                                </span>
                                             </span>
                                             {isMine && (
                                                 <span
