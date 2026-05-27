@@ -35,7 +35,7 @@ import {
 
 const MAX_INLINE_COMMUNITY = 2;
 const MAX_INLINE_LASTFM = 3;
-const MAX_INLINE_ARTIST = 2;
+const MAX_INLINE_FALLBACK = 3;
 const MAX_INLINE_SUGGESTED = 1;
 const TAG_INPUT_MAX = 60; // generous; validateTagInput caps the normalized form at 40 server-side
 
@@ -86,7 +86,7 @@ export function LibraryTrackRow({
     track,
     communityTags,
     suggestedTags = [],
-    layer1Tags = { lastfm: [], wikidata: [], artist: [] },
+    layer1Tags = { lastfm: [], wikidata: [], artist: [], external: [] },
     currentUserId,
 }) {
     const router = useRouter();
@@ -216,13 +216,16 @@ export function LibraryTrackRow({
     // Anything beyond gets folded into "+N" / "+N suggested" indicators.
     const inlineCommunity = communityTags.slice(0, MAX_INLINE_COMMUNITY);
     const inlineLastfm = layer1Tags.lastfm.slice(0, MAX_INLINE_LASTFM);
-    // Artist-floor genres are the fallback inline signal: only surface them in
-    // the collapsed row when there's no track-level Last.fm chip to show, so a
-    // track that would otherwise read "untagged" shows its artist's genre
-    // instead. The expanded drawer always lists them in full.
-    const inlineArtist =
+    // Fallback inline genres when a track has no track-level Last.fm chip: show
+    // its inherited artist-floor genres and streaming-catalog (Deezer/iTunes)
+    // genres, so a track that would otherwise read "untagged" still shows a
+    // genre. The expanded drawer always lists them in full.
+    const inlineFallback =
         inlineLastfm.length === 0
-            ? layer1Tags.artist.slice(0, MAX_INLINE_ARTIST)
+            ? [
+                  ...layer1Tags.artist.map((a) => ({ name: a.name, kind: "artist" })),
+                  ...layer1Tags.external.map((e) => ({ name: e.name, kind: e.source })),
+              ].slice(0, MAX_INLINE_FALLBACK)
             : [];
     const inlineSuggested = visibleSuggested.slice(0, MAX_INLINE_SUGGESTED);
     const moreSuggestedCount = visibleSuggested.length - inlineSuggested.length;
@@ -234,7 +237,7 @@ export function LibraryTrackRow({
     const hasAnyInline =
         inlineCommunity.length > 0 ||
         inlineLastfm.length > 0 ||
-        inlineArtist.length > 0 ||
+        inlineFallback.length > 0 ||
         inlineSuggested.length > 0;
 
     // Wikidata: group by property for the drawer section.
@@ -296,13 +299,17 @@ export function LibraryTrackRow({
                             {l.name}
                         </span>
                     ))}
-                    {inlineArtist.map((a) => (
+                    {inlineFallback.map((f) => (
                         <span
-                            key={`a-${a.name}`}
-                            title="Genre via artist"
+                            key={`f-${f.kind}-${f.name}`}
+                            title={
+                                f.kind === "artist"
+                                    ? "Genre via artist"
+                                    : `Genre via ${f.kind === "itunes" ? "Apple Music" : f.kind === "deezer" ? "Deezer" : f.kind}`
+                            }
                             className="inline-flex items-center rounded-full border border-border bg-surface px-2 py-0.5 text-xs italic text-foreground-subtle"
                         >
-                            {a.name}
+                            {f.name}
                         </span>
                     ))}
                     {hiddenChipCount > 0 && (
@@ -423,9 +430,32 @@ export function LibraryTrackRow({
                         </div>
                     )}
 
+                    {layer1Tags.external.length > 0 && (
+                        <div>
+                            <p className="eyebrow text-foreground-subtle">
+                                Streaming genre
+                            </p>
+                            <ul className="mt-2 flex flex-wrap gap-1.5">
+                                {layer1Tags.external.map((e) => (
+                                    <li
+                                        key={`${e.source}-${e.name}`}
+                                        title={`From ${e.source === "itunes" ? "Apple Music" : e.source === "deezer" ? "Deezer" : e.source}`}
+                                        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2 py-0.5 text-xs italic text-foreground-subtle"
+                                    >
+                                        <span>{e.name}</span>
+                                        <span className="text-[10px] uppercase not-italic tracking-wide text-foreground-subtle">
+                                            {e.source === "itunes" ? "apple" : e.source}
+                                        </span>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+
                     {layer1Tags.lastfm.length === 0 &&
                         layer1Tags.wikidata.length === 0 &&
-                        layer1Tags.artist.length === 0 && (
+                        layer1Tags.artist.length === 0 &&
+                        layer1Tags.external.length === 0 && (
                             <p className="text-xs text-foreground-subtle">
                                 No reference tags yet.
                             </p>

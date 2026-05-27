@@ -134,6 +134,7 @@ export default async function LibraryPage({ searchParams }) {
                                         lastfm: [],
                                         wikidata: [],
                                         artist: [],
+                                        external: [],
                                     }
                                 }
                                 currentUserId={user.id}
